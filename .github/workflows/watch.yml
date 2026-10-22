@@ -1,0 +1,54 @@
+name: Watch tickets
+
+on:
+  schedule:
+    - cron: '*/20 * * * *'
+  workflow_dispatch:
+    inputs:
+      test_alert:
+        description: Send a test Telegram message
+        type: boolean
+        default: false
+
+# One watcher at a time; a new run waits for the previous one to finish.
+concurrency:
+  group: watcher
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    container: mcr.microsoft.com/playwright:v1.56.1-noble
+    env:
+      TZ: Europe/Budapest
+      HOME: /root
+    steps:
+      - name: Stop after the last visit date
+        id: active
+        run: echo "on=$([ "$(date +%Y%m%d)" -le 20261227 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.active.outputs.on == 'true'
+        with:
+          ref: ${{ github.ref_name }}   # latest state.json, not the commit the run was queued on
+      - run: npm install --no-audit --no-fund
+        if: steps.active.outputs.on == 'true'
+      - name: Check for open slots (about 25 minutes, every 3 minutes)
+        if: steps.active.outputs.on == 'true'
+        run: node watch.js
+        env:
+          RUN_MINUTES: ${{ github.event_name == 'schedule' && '25' || '1' }}
+          INTERVAL_SECONDS: '180'
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TEST_ALERT: ${{ inputs.test_alert && '1' || '' }}
+      - name: Save state
+        if: always() && steps.active.outputs.on == 'true'
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name watcher-bot
+          git config user.email watcher-bot@users.noreply.github.com
+          git add state.json
+          git diff --cached --quiet || (git commit -m "Update watcher state" && git push)
