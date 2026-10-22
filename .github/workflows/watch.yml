@@ -1,10 +1,17 @@
 name: Watch tickets
 
+# A "chain" run watches for about 50 minutes and then starts the next chain run,
+# so coverage does not depend on GitHub's cron, which can be late or skipped.
+# The cron only restarts the chain if it ever stops.
 on:
   schedule:
-    - cron: '*/20 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
+      chain:
+        description: Keep watching and start the next run when done
+        type: boolean
+        default: false
       test_alert:
         description: Send a test Telegram message
         type: boolean
@@ -14,18 +21,36 @@ on:
         type: boolean
         default: false
 
-# One watcher at a time; a new run waits for the previous one to finish.
-concurrency:
-  group: watcher
-  cancel-in-progress: false
-
 permissions:
   contents: write
+  actions: write
 
 jobs:
-  watch:
+  keepalive:
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Restart the chain if nothing is running
+        run: |
+          [ "$(TZ=Europe/Budapest date +%Y%m%d)" -le 20261227 ] || exit 0
+          busy=0
+          for s in in_progress queued pending waiting; do
+            n=$(gh api "repos/${{ github.repository }}/actions/workflows/watch.yml/runs?event=workflow_dispatch&status=$s" --jq '.total_count')
+            busy=$((busy + n))
+          done
+          echo "dispatch runs active: $busy"
+          [ "$busy" -gt 0 ] || gh workflow run watch.yml -R "${{ github.repository }}" --ref main -f chain=true
+
+  watch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # One watcher at a time; a new run waits for the previous one to finish.
+    concurrency:
+      group: watcher
+      cancel-in-progress: false
     container: mcr.microsoft.com/playwright:v1.56.1-noble
     env:
       TZ: Europe/Budapest
@@ -40,11 +65,11 @@ jobs:
           ref: ${{ github.ref_name }}   # latest state.json, not the commit the run was queued on
       - run: npm install --no-audit --no-fund
         if: steps.active.outputs.on == 'true'
-      - name: Check for open slots (about 25 minutes, every 3 minutes)
+      - name: Check for open slots (every 3 minutes)
         if: steps.active.outputs.on == 'true'
         run: node watch.js
         env:
-          RUN_MINUTES: ${{ github.event_name == 'schedule' && '25' || '1' }}
+          RUN_MINUTES: ${{ inputs.chain && '50' || '1' }}
           INTERVAL_SECONDS: '180'
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TEST_ALERT: ${{ inputs.test_alert && '1' || '' }}
@@ -57,3 +82,9 @@ jobs:
           git config user.email watcher-bot@users.noreply.github.com
           git add state.json
           git diff --cached --quiet || (git commit -m "Update watcher state" && git push)
+      - name: Start the next run
+        if: always() && inputs.chain && steps.active.outputs.on == 'true'
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/watch.yml/dispatches" \
+            -d '{"ref":"main","inputs":{"chain":"true"}}'
