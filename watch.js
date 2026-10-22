@@ -9,7 +9,7 @@ const DATES = (process.env.DATES || '2026-12-22,2026-12-23,2026-12-27').split(',
 const RUN_MINUTES = Number(process.env.RUN_MINUTES || 0);   // 0 = check once
 const INTERVAL_SECONDS = Number(process.env.INTERVAL_SECONDS || 180);
 const STATE_FILE = process.env.STATE_FILE || 'state.json';
-const { TELEGRAM_BOT_TOKEN, HTTPS_PROXY, TEST_ALERT } = process.env;
+const { TELEGRAM_BOT_TOKEN, HTTPS_PROXY, TEST_ALERT, SIMULATE_OPEN } = process.env;
 let chatId = process.env.TELEGRAM_CHAT_ID;
 const HU_MONTHS = ['január','február','március','április','május','június','július','augusztus','szeptember','október','november','december'];
 
@@ -99,20 +99,26 @@ async function main() {
         const result = await checkOnce(browser);
         failures = 0;
         state.lastOk = new Date().toISOString();
+        // Dry run of the real alert: pretend the first slot found is bookable.
+        if (SIMULATE_OPEN) {
+          const first = Object.values(result).flatMap(r => r.events)[0];
+          if (first) { first.status = 'available'; delete state.notified[first.id]; }
+        }
         const open = [];
         for (const [iso, r] of Object.entries(result)) {
           const slots = r.events.map(e => `${budapestTime(e.startDate)} ${e.status}`);
           console.log(new Date().toISOString(), iso, r.note || slots.join(' | ') || 'no events');
           for (const e of r.events) {
-            if (e.status !== 'sold-out') open.push(e);
+            // The site's statuses: available, sold-out, not-available, cancelled, paused.
+            if (e.status === 'available') open.push(e);
             else delete state.notified[e.id];   // re-alert if it opens again later
           }
         }
         const fresh = open.filter(e => !state.notified[e.id]);
         if (fresh.length) {
           const lines = fresh.map(e => `• <b>${budapestTime(e.startDate)}</b>` + (e.availableTickets ? ` (${e.availableTickets} left)` : ''));
-          await telegram(`🎟 <b>Parliament tickets available!</b>\n${lines.join('\n')}\n\nBook now: ${PAGE}\nFamily ticket: 2 adults + 1 child (6-14). Under-6s are free, ask on site or at idegenforgalom@parlament.hu.`);
-          for (const e of fresh) state.notified[e.id] = new Date().toISOString();
+          await telegram(`${SIMULATE_OPEN ? '🧪 SIMULATED TEST, not real:\n' : ''}🎟 <b>Parliament tickets available!</b>\n${lines.join('\n')}\n\nBook now: ${PAGE}\nFamily ticket: 2 adults + 1 child (6-14). Under-6s are free, ask on site or at idegenforgalom@parlament.hu.`);
+          if (!SIMULATE_OPEN) for (const e of fresh) state.notified[e.id] = new Date().toISOString();
         }
         if (!state.welcomed && chatId) {
           await telegram(`✅ Watcher is live. Checking ${DATES.join(', ')} every few minutes until Dec 27. Right now: ${open.length ? open.length + ' open slot(s)' : 'all sold out'}.`);

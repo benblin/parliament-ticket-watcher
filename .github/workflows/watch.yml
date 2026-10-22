@@ -9,6 +9,10 @@ on:
         description: Send a test Telegram message
         type: boolean
         default: false
+      simulate_open:
+        description: Pretend one slot is open to test the real alert
+        type: boolean
+        default: false
 
 # One watcher at a time; a new run waits for the previous one to finish.
 concurrency:
@@ -44,6 +48,7 @@ jobs:
           INTERVAL_SECONDS: '180'
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TEST_ALERT: ${{ inputs.test_alert && '1' || '' }}
+          SIMULATE_OPEN: ${{ inputs.simulate_open && '1' || '' }}
       - name: Save state
         if: always() && steps.active.outputs.on == 'true'
         run: |
