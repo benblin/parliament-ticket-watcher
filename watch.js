@@ -22,7 +22,9 @@ const budapestTime = ms => new Date(ms).toLocaleString('en-GB', { timeZone: 'Eur
 async function findChat(state) {
   chatId = chatId || state.chatId;
   if (chatId || !TELEGRAM_BOT_TOKEN) return;
-  const r = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates`).then(r => r.json()).catch(() => ({}));
+  const r = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates`).then(r => r.json()).catch(e => ({ description: e.message }));
+  if (!r.ok) console.log('Telegram getUpdates failed:', r.description || 'unknown error');
+  else console.log(`Telegram getUpdates: ${r.result.length} update(s)`);
   const chats = (r.result || []).map(u => (u.message || u.my_chat_member || {}).chat).filter(c => c && c.type === 'private');
   if (chats.length) state.chatId = chats[0].id;
   chatId = state.chatId;
